@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use serialport::{self, SerialPortInfo};
+use serialport::{self};
 
 #[derive(Debug)]
 pub struct Device {
@@ -12,7 +12,11 @@ pub struct Device {
 pub fn get_sensors(vid: u16, pid: u16, baud_rate: u32) -> Result<Vec<Device>, Box<dyn Error>> {
     let mut valid_devices = Vec::new();
     for device in serialport::available_ports()? {
-        println!("{device:?}");
+        if cfg!(target_os = "macos") {
+            if device.port_name.contains("/dev/tty") {
+                continue;
+            }
+        }
         if let serialport::SerialPortType::UsbPort(info) = device.port_type {
             if info.vid == vid && info.pid == pid {
                 let serial = if let Some(serial_no) = info.serial_number {

@@ -1,11 +1,9 @@
-use std::error::Error;
-
 use climate_sensor::*;
 use dotenv::dotenv;
-use serialport::SerialPort;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
-use std::io::{self, BufRead, BufReader, Read};
+use std::error::Error;
+use std::io::Read;
 use std::thread;
 
 fn initialize() -> Result<(u16, u16, u32), Box<dyn Error>> {
@@ -18,27 +16,39 @@ fn initialize() -> Result<(u16, u16, u32), Box<dyn Error>> {
 
 fn read(device: Device) {
     println!("{}", device.port_name);
-    let port = serialport::new(&device.port_name, 9600)
-        .flow_control(serialport::FlowControl::Hardware)
-        .open();
+    let mut port = match serialport::new(&device.port_name, device.baud_rate)
+        // .flow_control(serialport::FlowControl::Software)
+        .open()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to open serial port {}: {}", device.port_name, e);
+            return;
+        }
+    };
 
-    let mut reader = BufReader::new(port.unwrap());
+    let mut buf = [0u8; 1024];
+    let mut line_buffer = String::new();
 
     loop {
-        let mut input = String::new();
-        match reader.read_line(&mut input) {
-            Ok(bytes_read) => {
-                if bytes_read > 0 {
-                    println!("{input}");
+        match port.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                // Append newly read bytes to buffer
+                line_buffer.push_str(&String::from_utf8_lossy(&buf[..n]));
+
+                // Process complete lines only
+                while let Some(pos) = line_buffer.find("\n") {
+                    let line = line_buffer[..pos].trim_end_matches(|c| c == '\r' || c == '\n');
+                    println!("{line}");
+                    line_buffer = line_buffer[pos + 1..].to_string(); // keep remainder
                 }
             }
-            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                // ignore timeout
-            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => {
                 eprintln!("Serial read error: {e}");
                 break;
             }
+            _ => {}
         }
     }
 }
@@ -50,13 +60,14 @@ fn main() {
         return;
     };
 
-    let mut known_devices = HashSet::new();
+    let mut known_devices: HashSet<String> = HashSet::new();
     loop {
         let mut current_devices = HashSet::new();
         if let Ok(devices) = get_sensors(vid, pid, baud_rate) {
             for device in devices {
                 current_devices.insert(device.serial.clone());
                 if !known_devices.contains(&device.serial) {
+                    println!("SPAWNING THREAD for device {device:?}!");
                     thread::spawn(move || read(device));
                 }
             }
